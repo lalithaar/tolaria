@@ -7,6 +7,8 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
+use crate::frontmatter::{with_frontmatter, update_frontmatter_content};
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct VaultEntry {
     pub path: String,
@@ -356,218 +358,17 @@ pub fn scan_vault(vault_path: &str) -> Result<Vec<VaultEntry>, String> {
     Ok(entries)
 }
 
-/// Value type for frontmatter updates
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum FrontmatterValue {
-    String(String),
-    Number(f64),
-    Bool(bool),
-    List(Vec<String>),
-    Null,
-}
-
-impl FrontmatterValue {
-    fn to_yaml_value(&self) -> String {
-        match self {
-            FrontmatterValue::String(s) => {
-                // Quote strings that need it (contain special chars or look like other types)
-                if s.contains(':') || s.contains('#') || s.contains('\n') || 
-                   s.starts_with('[') || s.starts_with('{') ||
-                   s == "true" || s == "false" || s == "null" ||
-                   s.parse::<f64>().is_ok() {
-                    format!("\"{}\"", s.replace('\"', "\\\""))
-                } else {
-                    s.clone()
-                }
-            }
-            FrontmatterValue::Number(n) => {
-                if n.fract() == 0.0 {
-                    format!("{}", *n as i64)
-                } else {
-                    format!("{}", n)
-                }
-            }
-            FrontmatterValue::Bool(b) => if *b { "true" } else { "false" }.to_string(),
-            FrontmatterValue::List(items) => {
-                if items.is_empty() {
-                    "[]".to_string()
-                } else {
-                    // Multi-line list format
-                    items.iter()
-                        .map(|item| {
-                            let quoted = if item.contains(':') || item.starts_with('[') || item.starts_with('{') {
-                                format!("\"{}\"", item.replace('\"', "\\\""))
-                            } else {
-                                format!("\"{}\"", item)
-                            };
-                            format!("  - {}", quoted)
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                }
-            }
-            FrontmatterValue::Null => "null".to_string(),
-        }
-    }
-}
+// Re-export for external consumers
+pub use crate::frontmatter::FrontmatterValue;
 
 /// Update a single frontmatter property in a markdown file
 pub fn update_frontmatter(path: &str, key: &str, value: FrontmatterValue) -> Result<String, String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("File does not exist: {}", path));
-    }
-    
-    let content = fs::read_to_string(file_path)
-        .map_err(|e| format!("Failed to read {}: {}", path, e))?;
-    
-    let updated = update_frontmatter_content(&content, key, Some(value))?;
-    
-    fs::write(file_path, &updated)
-        .map_err(|e| format!("Failed to write {}: {}", path, e))?;
-    
-    Ok(updated)
+    with_frontmatter(path, |content| update_frontmatter_content(content, key, Some(value.clone())))
 }
 
 /// Delete a frontmatter property from a markdown file
 pub fn delete_frontmatter_property(path: &str, key: &str) -> Result<String, String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("File does not exist: {}", path));
-    }
-    
-    let content = fs::read_to_string(file_path)
-        .map_err(|e| format!("Failed to read {}: {}", path, e))?;
-    
-    let updated = update_frontmatter_content(&content, key, None)?;
-    
-    fs::write(file_path, &updated)
-        .map_err(|e| format!("Failed to write {}: {}", path, e))?;
-    
-    Ok(updated)
-}
-
-/// Internal function to update frontmatter content
-fn update_frontmatter_content(content: &str, key: &str, value: Option<FrontmatterValue>) -> Result<String, String> {
-    // Check if file has frontmatter
-    if !content.starts_with("---\n") {
-        // No frontmatter - add it if we're setting a value
-        return match value {
-            Some(v) => {
-                let yaml_key = format_yaml_key(key);
-                let yaml_value = v.to_yaml_value();
-                let fm = if yaml_value.contains('\n') {
-                    format!("---\n{}:\n{}\n---\n", yaml_key, yaml_value)
-                } else {
-                    format!("---\n{}: {}\n---\n", yaml_key, yaml_value)
-                };
-                Ok(format!("{}{}", fm, content))
-            }
-            None => Ok(content.to_string()), // Nothing to delete
-        };
-    }
-    
-    // Find the end of frontmatter
-    let fm_end = content[4..].find("\n---")
-        .map(|i| i + 4)
-        .ok_or_else(|| "Malformed frontmatter: no closing ---".to_string())?;
-    
-    let fm_content = &content[4..fm_end];
-    let rest = &content[fm_end + 4..]; // Skip the closing "---"
-    
-    // Parse frontmatter line by line, preserving structure
-    let lines: Vec<&str> = fm_content.lines().collect();
-    let mut new_lines: Vec<String> = Vec::new();
-    let mut found_key = false;
-    let mut i = 0;
-    
-    while i < lines.len() {
-        let line = lines[i];
-        
-        // Check if this line is our target key
-        if line_is_key(line, key) {
-            found_key = true;
-            
-            // Skip this key and any list items that follow
-            i += 1;
-            while i < lines.len() && (lines[i].starts_with("  - ") || lines[i].trim().is_empty()) {
-                if lines[i].trim().is_empty() {
-                    break;
-                }
-                i += 1;
-            }
-            
-            // Add the updated value (if not deleting)
-            if let Some(ref v) = value {
-                let yaml_key = format_yaml_key(key);
-                let yaml_value = v.to_yaml_value();
-                if yaml_value.contains('\n') {
-                    new_lines.push(format!("{}:", yaml_key));
-                    new_lines.push(yaml_value);
-                } else {
-                    new_lines.push(format!("{}: {}", yaml_key, yaml_value));
-                }
-            }
-            continue;
-        }
-        
-        new_lines.push(line.to_string());
-        i += 1;
-    }
-    
-    // If key wasn't found and we're adding, append it
-    if !found_key {
-        if let Some(ref v) = value {
-            let yaml_key = format_yaml_key(key);
-            let yaml_value = v.to_yaml_value();
-            if yaml_value.contains('\n') {
-                new_lines.push(format!("{}:", yaml_key));
-                new_lines.push(yaml_value);
-            } else {
-                new_lines.push(format!("{}: {}", yaml_key, yaml_value));
-            }
-        }
-    }
-    
-    // Rebuild the file
-    let new_fm = new_lines.join("\n");
-    Ok(format!("---\n{}\n---{}", new_fm, rest))
-}
-
-/// Check if a line defines a specific key (handles quoted and unquoted keys)
-fn line_is_key(line: &str, key: &str) -> bool {
-    let trimmed = line.trim_start();
-    
-    // Check unquoted: `key:`
-    if trimmed.starts_with(key) && trimmed[key.len()..].starts_with(':') {
-        return true;
-    }
-    
-    // Check double-quoted: `"key":`
-    let dq = format!("\"{}\":", key);
-    if trimmed.starts_with(&dq) {
-        return true;
-    }
-    
-    // Check single-quoted: `'key':`
-    let sq = format!("'{}\':", key);
-    if trimmed.starts_with(&sq) {
-        return true;
-    }
-    
-    false
-}
-
-/// Format a key for YAML output (quote if necessary)
-fn format_yaml_key(key: &str) -> String {
-    // Quote keys that contain spaces or special characters
-    if key.contains(' ') || key.contains(':') || key.contains('#') || 
-       key.chars().any(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-') {
-        format!("\"{}\"", key)
-    } else {
-        key.to_string()
-    }
+    with_frontmatter(path, |content| update_frontmatter_content(content, key, None))
 }
 
 #[cfg(test)]
@@ -725,91 +526,5 @@ This is a project note.
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_update_frontmatter_string() {
-        let content = "---\nStatus: Draft\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "Status", Some(FrontmatterValue::String("Active".to_string()))).unwrap();
-        assert!(updated.contains("Status: Active"));
-        assert!(!updated.contains("Status: Draft"));
-    }
-
-    #[test]
-    fn test_update_frontmatter_add_new_key() {
-        let content = "---\nStatus: Draft\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "Owner", Some(FrontmatterValue::String("Luca".to_string()))).unwrap();
-        assert!(updated.contains("Owner: Luca"));
-        assert!(updated.contains("Status: Draft")); // Original key preserved
-    }
-
-    #[test]
-    fn test_update_frontmatter_quoted_key() {
-        let content = "---\n\"Is A\": Note\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "Is A", Some(FrontmatterValue::String("Project".to_string()))).unwrap();
-        assert!(updated.contains("\"Is A\": Project"));
-        assert!(!updated.contains("Note"));
-    }
-
-    #[test]
-    fn test_update_frontmatter_list() {
-        let content = "---\nStatus: Draft\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "aliases", Some(FrontmatterValue::List(vec!["Alias1".to_string(), "Alias2".to_string()]))).unwrap();
-        assert!(updated.contains("aliases:"));
-        assert!(updated.contains("  - \"Alias1\""));
-        assert!(updated.contains("  - \"Alias2\""));
-    }
-
-    #[test]
-    fn test_update_frontmatter_replace_list() {
-        let content = "---\naliases:\n  - Old1\n  - Old2\nStatus: Draft\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "aliases", Some(FrontmatterValue::List(vec!["New1".to_string()]))).unwrap();
-        assert!(updated.contains("  - \"New1\""));
-        assert!(!updated.contains("Old1"));
-        assert!(!updated.contains("Old2"));
-        assert!(updated.contains("Status: Draft")); // Other keys preserved
-    }
-
-    #[test]
-    fn test_delete_frontmatter_property() {
-        let content = "---\nStatus: Draft\nOwner: Luca\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "Owner", None).unwrap();
-        assert!(!updated.contains("Owner"));
-        assert!(updated.contains("Status: Draft")); // Other key preserved
-    }
-
-    #[test]
-    fn test_delete_frontmatter_list_property() {
-        let content = "---\naliases:\n  - Alias1\n  - Alias2\nStatus: Draft\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "aliases", None).unwrap();
-        assert!(!updated.contains("aliases"));
-        assert!(!updated.contains("Alias1"));
-        assert!(updated.contains("Status: Draft"));
-    }
-
-    #[test]
-    fn test_update_frontmatter_no_existing() {
-        let content = "# Test\n\nSome content here.";
-        let updated = update_frontmatter_content(content, "Status", Some(FrontmatterValue::String("Draft".to_string()))).unwrap();
-        assert!(updated.starts_with("---\n"));
-        assert!(updated.contains("Status: Draft"));
-        assert!(updated.contains("# Test"));
-    }
-
-    #[test]
-    fn test_update_frontmatter_bool() {
-        let content = "---\nStatus: Draft\n---\n# Test\n";
-        let updated = update_frontmatter_content(content, "Reviewed", Some(FrontmatterValue::Bool(true))).unwrap();
-        assert!(updated.contains("Reviewed: true"));
-    }
-
-    #[test]
-    fn test_format_yaml_key_simple() {
-        assert_eq!(format_yaml_key("Status"), "Status");
-        assert_eq!(format_yaml_key("is_a"), "is_a");
-    }
-
-    #[test]
-    fn test_format_yaml_key_with_spaces() {
-        assert_eq!(format_yaml_key("Is A"), "\"Is A\"");
-        assert_eq!(format_yaml_key("Created at"), "\"Created at\"");
-    }
+    // Frontmatter update/delete tests are in frontmatter.rs
 }

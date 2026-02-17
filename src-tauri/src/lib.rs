@@ -1,8 +1,10 @@
+pub mod frontmatter;
 pub mod git;
 pub mod vault;
 
 use git::{GitCommit, ModifiedFile};
-use vault::{VaultEntry, FrontmatterValue};
+use vault::VaultEntry;
+use frontmatter::FrontmatterValue;
 
 #[tauri::command]
 fn list_vault(path: String) -> Result<Vec<VaultEntry>, String> {
