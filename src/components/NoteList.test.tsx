@@ -22,6 +22,9 @@ const mockEntries: VaultEntry[] = [
     createdAt: null,
     fileSize: 1024,
     snippet: 'Build a personal knowledge management app.',
+    relationships: {
+      'Related to': ['[[topic/software-development]]'],
+    },
   },
   {
     path: '/Users/luca/Laputa/note/facebook-ads-strategy.md',
@@ -38,6 +41,10 @@ const mockEntries: VaultEntry[] = [
     createdAt: null,
     fileSize: 847,
     snippet: 'Lookalike audiences convert 3x better.',
+    relationships: {
+      'Belongs to': ['[[project/26q1-laputa-app]]'],
+      'Related to': ['[[topic/growth]]'],
+    },
   },
   {
     path: '/Users/luca/Laputa/person/matteo-cellini.md',
@@ -54,6 +61,7 @@ const mockEntries: VaultEntry[] = [
     createdAt: null,
     fileSize: 320,
     snippet: 'Sponsorship manager.',
+    relationships: {},
   },
   {
     path: '/Users/luca/Laputa/event/2026-02-14-kickoff.md',
@@ -70,6 +78,7 @@ const mockEntries: VaultEntry[] = [
     createdAt: null,
     fileSize: 512,
     snippet: 'Project kickoff meeting notes.',
+    relationships: {},
   },
   {
     path: '/Users/luca/Laputa/topic/software-development.md',
@@ -86,6 +95,7 @@ const mockEntries: VaultEntry[] = [
     createdAt: null,
     fileSize: 256,
     snippet: 'Frontend, backend, and systems programming.',
+    relationships: {},
   },
 ]
 
@@ -132,7 +142,7 @@ describe('NoteList', () => {
     expect(screen.queryByText('Matteo Cellini')).not.toBeInTheDocument()
     // Group headers shown
     expect(screen.getByText('Children')).toBeInTheDocument()
-    expect(screen.getByText('Related To')).toBeInTheDocument()
+    expect(screen.getByText('Related to')).toBeInTheDocument()
   })
 
   it('filters by topic (relatedTo references)', () => {

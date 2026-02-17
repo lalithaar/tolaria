@@ -105,6 +105,29 @@ function findBacklinks(entity: VaultEntry, allEntries: VaultEntry[], allContent:
   })
 }
 
+// Priority ordering for relationship groups (lower = first).
+// Keys not listed here appear alphabetically after these.
+const GROUP_PRIORITY: Record<string, number> = {
+  'Has': 0,
+  'Children': 1,
+  'Events': 2,
+  'Topics': 3,
+}
+const BACKLINKS_KEY = 'Backlinks'
+
+function addGroup(
+  groups: RelationshipGroup[],
+  label: string,
+  entries: VaultEntry[],
+  seen: Set<string>,
+) {
+  const unseen = entries.filter((e) => !seen.has(e.path))
+  if (unseen.length > 0) {
+    groups.push({ label, entries: unseen })
+    unseen.forEach((e) => seen.add(e.path))
+  }
+}
+
 function buildRelationshipGroups(
   entity: VaultEntry,
   allEntries: VaultEntry[],
@@ -112,15 +135,21 @@ function buildRelationshipGroups(
 ): RelationshipGroup[] {
   const groups: RelationshipGroup[] = []
   const seen = new Set<string>([entity.path])
+  const rels = entity.relationships ?? {}
 
+  // 1. "Has" — from the entity's own relationships map
+  const hasRefs = rels['Has'] ?? []
+  if (hasRefs.length > 0) {
+    addGroup(groups, 'Has', resolveRefs(hasRefs, allEntries).sort(sortByModified), seen)
+  }
+
+  // 2. Children — entries whose belongsTo points to this entity (reverse lookup, excluding events)
   const children = allEntries
     .filter((e) => !seen.has(e.path) && e.isA !== 'Event' && refsMatch(e.belongsTo, entity))
     .sort(sortByModified)
-  if (children.length > 0) {
-    groups.push({ label: 'Children', entries: children })
-    children.forEach((e) => seen.add(e.path))
-  }
+  addGroup(groups, 'Children', children, seen)
 
+  // 3. Events — entities of type Event that reference this entity via belongsTo/relatedTo
   const events = allEntries
     .filter(
       (e) =>
@@ -129,37 +158,37 @@ function buildRelationshipGroups(
         (refsMatch(e.belongsTo, entity) || refsMatch(e.relatedTo, entity))
     )
     .sort(sortByModified)
-  if (events.length > 0) {
-    groups.push({ label: 'Events', entries: events })
-    events.forEach((e) => seen.add(e.path))
+  addGroup(groups, 'Events', events, seen)
+
+  // 4. "Topics" — from the entity's own relationships map
+  const topicRefs = rels['Topics'] ?? []
+  if (topicRefs.length > 0) {
+    addGroup(groups, 'Topics', resolveRefs(topicRefs, allEntries).sort(sortByModified), seen)
   }
 
+  // 5. All other generic relationship fields (alphabetically)
+  const handledKeys = new Set(['Has', 'Topics'])
+  const otherKeys = Object.keys(rels)
+    .filter((k) => !handledKeys.has(k))
+    .sort((a, b) => a.localeCompare(b))
+  for (const key of otherKeys) {
+    const refs = rels[key]
+    if (refs && refs.length > 0) {
+      addGroup(groups, key, resolveRefs(refs, allEntries).sort(sortByModified), seen)
+    }
+  }
+
+  // 6. Referenced By — entries that reference this entity via relatedTo (reverse lookup)
   const referencedBy = allEntries
     .filter((e) => !seen.has(e.path) && e.isA !== 'Event' && refsMatch(e.relatedTo, entity))
     .sort(sortByModified)
-  if (referencedBy.length > 0) {
-    groups.push({ label: 'Referenced By', entries: referencedBy })
-    referencedBy.forEach((e) => seen.add(e.path))
-  }
+  addGroup(groups, 'Referenced By', referencedBy, seen)
 
-  const belongsTo = resolveRefs(entity.belongsTo, allEntries).filter((e) => !seen.has(e.path))
-  if (belongsTo.length > 0) {
-    groups.push({ label: 'Belongs To', entries: belongsTo })
-    belongsTo.forEach((e) => seen.add(e.path))
-  }
-
-  const relatedTo = resolveRefs(entity.relatedTo, allEntries).filter((e) => !seen.has(e.path))
-  if (relatedTo.length > 0) {
-    groups.push({ label: 'Related To', entries: relatedTo })
-    relatedTo.forEach((e) => seen.add(e.path))
-  }
-
+  // 7. Backlinks — always last
   const backlinks = findBacklinks(entity, allEntries, allContent)
     .filter((e) => !seen.has(e.path))
     .sort(sortByModified)
-  if (backlinks.length > 0) {
-    groups.push({ label: 'Backlinks', entries: backlinks })
-  }
+  addGroup(groups, BACKLINKS_KEY, backlinks, seen)
 
   return groups
 }

@@ -189,6 +189,7 @@ export function useNoteActions(
       aliases: [], belongsTo: [], relatedTo: [],
       status: type === 'Topic' || type === 'Person' ? null : 'Active',
       owner: null, cadence: null, modifiedAt: now, createdAt: now, fileSize: 0,
+      snippet: '', relationships: {},
     }
 
     const frontmatter = [
