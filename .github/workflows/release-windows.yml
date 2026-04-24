@@ -51,7 +51,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app (Windows NSIS installer)
-        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis -- --skip-signing
 
       - name: Validate Windows bundles
         shell: bash
