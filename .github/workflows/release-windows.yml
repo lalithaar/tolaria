@@ -1,0 +1,84 @@
+name: Release (Windows)
+
+on:
+  push:
+    tags:
+      - 'windows-v*'
+      - 'windows-release-*'
+
+concurrency:
+  group: release-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Build and release Windows .exe
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            src-tauri\target
+          key: ${{ runner.os }}-windows-release-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-windows-release-cargo-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app (Windows NSIS installer)
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Validate Windows bundles
+        shell: bash
+        run: |
+          shopt -s nullglob
+          installers=(src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe)
+          if [ ${#installers[@]} -eq 0 ]; then
+            echo "::error::Windows build produced no NSIS .exe installer."
+            exit 1
+          fi
+          echo "Found installers: ${installers[*]}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Tolaria ${{ github.ref_name }}
+          body: |
+            ## Windows installer (unsigned)
+
+            Download the `.exe` below and run it to install Tolaria on Windows.
+
+            > **Note:** Because this build is unsigned, Windows Defender SmartScreen may show a warning.
+            > Click **"More info" → "Run anyway"** to proceed with the installation.
+
+            **Built from commit** `${{ github.sha }}`
+          draft: false
+          prerelease: true
+          files: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
